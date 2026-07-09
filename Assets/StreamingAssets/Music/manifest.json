@@ -1,0 +1,19 @@
+{
+    "songs": [
+        {
+            "displayName": "4hands",
+            "sheetMusicFileName": "Music/4hands/4hands.mscz",
+            "audioFileName": "Music/4hands/4hands.wav"
+        },
+        {
+            "displayName": "endoftheworld",
+            "sheetMusicFileName": "Music/endoftheworld/endoftheworld.mscz",
+            "audioFileName": "Music/endoftheworld/endoftheworld.mp3"
+        },
+        {
+            "displayName": "fur-elise",
+            "sheetMusicFileName": "Music/fur-elise/fur-elise.mscz",
+            "audioFileName": "Music/fur-elise/fur-elise.mp3"
+        }
+    ]
+}
