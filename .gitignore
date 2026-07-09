@@ -105,3 +105,16 @@ InitTestScene*.unity*
 
 # Auto-generated scenes by play mode tests
 /[Aa]ssets/[Ii]nit[Tt]est[Ss]cene*.unity*
+
+# Unity crash-recovery scene snapshots
+/[Aa]ssets/_Recovery/
+/[Aa]ssets/_Recovery.meta
+
+# Burst compiler debug output (explicitly named "DoNotShip" by Unity itself)
+*_BurstDebugInformation_DoNotShip/
+
+# IL2CPP build backup folders (named by Unity: "BackUpThisFolder_ButDontShipItWithYourGame")
+*_BackUpThisFolder_ButDontShipItWithYourGame/
+
+# Personal notes vault, not project source
+/RGen Notes/
