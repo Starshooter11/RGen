@@ -3,15 +3,17 @@ using UnityEngine;
 namespace RhythmGame
 {
     /// <summary>
-    /// Procedurally builds the lane visuals, hit bars, note prefab, and hit zone Transforms at runtime.
-    /// Attach to any GameObject in the scene. Runs before GameManager.Start via script execution order.
-    /// No manual scene wiring needed except assigning a song clip to GameManager.
+    /// Procedurally builds the lane visuals, hit bars, and hit zone Transforms at runtime.
+    /// Attach to any GameObject in the scene. Runs before GameManager.Start via script execution
+    /// order. Deliberately doesn't touch GameManager's own _notePrefab — notes are their own
+    /// user-authored prefab, independent of lane layout (see SetupFromLaneBuilder).
     /// </summary>
     [DefaultExecutionOrder(-10)]
     public class LaneSetup : MonoBehaviour
     {
         [Header("Layout")]
-        [SerializeField] private int _laneCount = 5;
+        // Fallback per-lane colors when _laneAreaPrefab is empty (plain code-generated quads).
+        // Ignored once a prefab is assigned — its own sprite/color is what's used instead.
         [SerializeField] private Color[] _laneColors = {
             new Color(0.15f, 0.15f, 0.20f),
             new Color(0.12f, 0.12f, 0.17f),
@@ -20,12 +22,27 @@ namespace RhythmGame
             new Color(0.15f, 0.15f, 0.20f),
         };
 
+        [Header("Lane Area")]
+        [Tooltip("Template for one lane's hit bar segment — this is the hit bar area itself, " +
+                 "not the full-height lane background. Its transform.localScale (x = width, " +
+                 "y = height) and transform.position (x = center, y = height on screen) define " +
+                 "the WHOLE hit bar; that's divided by the chosen lane count and each lane is an " +
+                 "instance of this prefab rescaled to its width share, keeping the prefab's own " +
+                 "height/sprite/color. Left empty: falls back to a plain colored bar sized from " +
+                 "_hitBarColor/_hitBarHeight spanning the full camera width, same as before.")]
+        [SerializeField] private GameObject _laneAreaPrefab;
+
+        // 4-6, read from LaneSettings (user-configurable via MainMenu > Options > Lane Count).
+        private int _laneCount;
+
         [Header("Hit Bar")]
         [SerializeField] private Color _hitBarColor = new Color(0.9f, 0.9f, 0.9f, 0.8f);
         [SerializeField] private float _hitBarHeight = 0.15f; // fraction of screen height
 
         [Header("Note")]
-        [SerializeField] private Color _noteColor = Color.white;
+        // Only used to estimate a spawn margin above the screen (see spawnY below) — the note's
+        // actual look/size comes from GameManager's own _notePrefab, not from LaneSetup, so this
+        // just needs to be roughly note-sized, not an exact match.
         [SerializeField] private float _noteHeightFraction = 0.04f; // fraction of screen height
 
         [Header("References — auto-filled if left empty")]
@@ -45,6 +62,8 @@ namespace RhythmGame
 
         private void Build()
         {
+            _laneCount = LaneSettings.LaneCount;
+
             // Use viewport conversion so positions are always correct regardless of camera setup.
             // Viewport: (0,0) = bottom-left, (1,1) = top-right, z = distance from camera.
             float z = Mathf.Abs(_cam.transform.position.z);
@@ -54,10 +73,22 @@ namespace RhythmGame
 
             float camWidth  = topRight.x - bottomLeft.x;
             float camHeight = topRight.y - bottomLeft.y;
-            float laneWidth = camWidth / _laneCount;
 
+            // Hit bar geometry — camera-fraction-based defaults, overridden entirely by
+            // _laneAreaPrefab's own transform when one's assigned (see its tooltip).
             float hitBarWorldHeight = camHeight * _hitBarHeight;
             float hitBarY = bottomLeft.y + hitBarWorldHeight * 0.5f;  // near bottom
+            float totalWidth  = camWidth;
+            float areaCenterX = (bottomLeft.x + topRight.x) * 0.5f;
+            if (_laneAreaPrefab != null)
+            {
+                totalWidth        = _laneAreaPrefab.transform.localScale.x;
+                hitBarWorldHeight = _laneAreaPrefab.transform.localScale.y;
+                areaCenterX       = _laneAreaPrefab.transform.position.x;
+                hitBarY           = _laneAreaPrefab.transform.position.y;
+            }
+            float laneWidth = totalWidth / _laneCount;
+            float areaLeftX = areaCenterX - totalWidth * 0.5f;
 
             float noteWorldHeight = camHeight * _noteHeightFraction;
             float spawnY = topRight.y + noteWorldHeight;  // just above top of screen
@@ -65,16 +96,14 @@ namespace RhythmGame
             var hitZones    = new Transform[_laneCount];
             var feedbacks   = new LaneTapFeedback[_laneCount];
 
-            GameObject notePrefab = CreateNotePrefab(laneWidth * 0.85f, noteWorldHeight);
-
-            float camCenterX = (bottomLeft.x + topRight.x) * 0.5f;
             float camCenterY = (bottomLeft.y + topRight.y) * 0.5f;
 
             for (int i = 0; i < _laneCount; i++)
             {
-                float laneX = bottomLeft.x + laneWidth * (i + 0.5f);
+                float laneX = areaLeftX + laneWidth * (i + 0.5f);
 
-                // Lane background
+                // Lane background (full-height track column) — always a plain colored quad,
+                // independent of the hit-bar prefab.
                 CreateQuad(
                     $"Lane_{i}",
                     new Vector3(laneX, camCenterY, 1f),
@@ -94,13 +123,10 @@ namespace RhythmGame
                     );
                 }
 
-                // Hit bar
-                GameObject hitBar = CreateQuad(
-                    $"HitBar_{i}",
-                    new Vector3(laneX, hitBarY, 0.5f),
-                    new Vector3(laneWidth - 0.02f, hitBarWorldHeight, 1f),
-                    _hitBarColor
-                );
+                // Hit bar — this IS the "lane area": an instance of _laneAreaPrefab resized to
+                // this lane's share of its width if one's assigned, else the previous
+                // flat-colored bar.
+                GameObject hitBar = CreateLaneBlock($"HitBar_{i}", laneX, hitBarY, 0.5f, laneWidth - 0.02f, hitBarWorldHeight, _hitBarColor);
 
                 // Tap flash overlay (starts invisible)
                 GameObject flashObj = CreateQuad(
@@ -119,8 +145,9 @@ namespace RhythmGame
                 hitZones[i] = hitZoneGO.transform;
             }
 
-            // Wire everything into GameManager via the internal setup method
-            _gameManager.SetupFromLaneBuilder(hitZones, feedbacks, notePrefab, spawnY);
+            // Wire everything into GameManager via the internal setup method — deliberately not
+            // touching _notePrefab (see SetupFromLaneBuilder's doc comment).
+            _gameManager.SetupFromLaneBuilder(hitZones, feedbacks, spawnY);
             _inputHandler.SetLaneCount(_laneCount);
         }
 
@@ -131,20 +158,22 @@ namespace RhythmGame
             return i % 2 == 0 ? new Color(0.15f, 0.15f, 0.20f) : new Color(0.12f, 0.12f, 0.17f);
         }
 
-        private GameObject CreateNotePrefab(float width, float height)
+        // Splits _laneAreaPrefab into one lane's share of its total width, preserving whatever
+        // sprite/color/material it was authored with — only localScale.x is overridden (height
+        // was already taken from the prefab up in Build(), for the fallback-quad case only).
+        // Falls back to a plain colored quad when no prefab is assigned.
+        private GameObject CreateLaneBlock(string name, float centerX, float centerY, float z, float width, float height, Color fallbackColor)
         {
-            var go = new GameObject("NotePrefab");
-            go.SetActive(false); // prefab-like: inactive until instantiated
+            if (_laneAreaPrefab == null)
+                return CreateQuad(name, new Vector3(centerX, centerY, z), new Vector3(width, height, 1f), fallbackColor);
 
-            var sr = go.AddComponent<SpriteRenderer>();
-            sr.sprite = CreateRoundedRectSprite(64, 24, _noteColor);
-            sr.material = SpriteMaterial;
-            sr.sortingOrder = 2;
-
-            go.transform.localScale = new Vector3(width, height, 1f);
-            go.AddComponent<NoteController>();
-            DontDestroyOnLoad(go);
-            return go;
+            GameObject block = Instantiate(_laneAreaPrefab, new Vector3(centerX, centerY, z), Quaternion.identity);
+            block.name = name;
+            block.SetActive(true);
+            Vector3 scale = block.transform.localScale;
+            scale.x = width;
+            block.transform.localScale = scale;
+            return block;
         }
 
         private GameObject CreateQuad(string name, Vector3 position, Vector3 scale, Color color)
@@ -189,31 +218,6 @@ namespace RhythmGame
                 }
                 return _spriteMat;
             }
-        }
-
-        // Simple rounded rectangle texture for notes
-        private static Sprite CreateRoundedRectSprite(int w, int h, Color color)
-        {
-            var tex = new Texture2D(w, h, TextureFormat.RGBA32, false);
-            tex.filterMode = FilterMode.Bilinear;
-            float rx = w * 0.3f, ry = h * 0.3f; // corner radius fractions
-            for (int y = 0; y < h; y++)
-            {
-                for (int x = 0; x < w; x++)
-                {
-                    tex.SetPixel(x, y, IsInsideRoundedRect(x, y, w, h, rx, ry) ? color : Color.clear);
-                }
-            }
-            tex.Apply();
-            return Sprite.Create(tex, new Rect(0, 0, w, h), new Vector2(0.5f, 0.5f), Mathf.Max(w, h));
-        }
-
-        private static bool IsInsideRoundedRect(int x, int y, int w, int h, float rx, float ry)
-        {
-            float cx = Mathf.Clamp(x, rx, w - 1 - rx);
-            float cy = Mathf.Clamp(y, ry, h - 1 - ry);
-            float dx = (x - cx) / rx, dy = (y - cy) / ry;
-            return dx * dx + dy * dy <= 1f;
         }
     }
 }

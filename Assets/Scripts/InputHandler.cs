@@ -70,13 +70,18 @@ namespace RhythmGame
         }
 
 #if UNITY_EDITOR
+        // QWERTY home row starting at A/S/D/F, extended rightward (G, H) to cover up to
+        // LaneSettings.MaxLaneCount lanes. HandleKeyboard only loops the first _laneCount of
+        // these each frame, so lanes beyond the current count are simply never polled — that's
+        // the "deactivation" for lower lane counts, no separate enable/disable needed.
         private static readonly UnityEngine.InputSystem.Key[] _editorKeys =
         {
             UnityEngine.InputSystem.Key.A,
             UnityEngine.InputSystem.Key.S,
             UnityEngine.InputSystem.Key.D,
             UnityEngine.InputSystem.Key.F,
-            UnityEngine.InputSystem.Key.Space,
+            UnityEngine.InputSystem.Key.G,
+            UnityEngine.InputSystem.Key.H,
         };
 
         private void HandleKeyboard()

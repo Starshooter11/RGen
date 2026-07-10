@@ -87,9 +87,12 @@ namespace RhythmGame
         public const float MissWindow = 0.2f;
 
         [Header("Song Playback")]
-        [Tooltip("Shift notes earlier (negative) or later (positive) to compensate for audio latency. Tune by ear in small steps (e.g. -0.1).")]
-        [SerializeField] private float _audioLatencyOffset = 0f;
         [SerializeField] private string _mainMenuSceneName = "MainMenu";
+
+        // Loaded fresh each time this scene starts, from whatever the player last calibrated
+        // via LatencyCalibrator's Sync panel (MainMenu > Options > Audio Sync). Defaults to 0
+        // (no correction) until the player runs that test at least once.
+        private float _audioLatencyOffset;
 
         [Header("Beatmap Generation")]
         [SerializeField] private BeatmapGenerator.Settings _generatorSettings = BeatmapGenerator.Settings.Default;
@@ -115,12 +118,14 @@ namespace RhythmGame
         private bool _playing;
         private bool _ready;
 
-        // Called by LaneSetup before Start runs
-        public void SetupFromLaneBuilder(Transform[] hitZones, LaneTapFeedback[] feedbacks, GameObject notePrefab, float spawnY)
+        // Called by LaneSetup before Start runs. Doesn't touch _notePrefab — that's assigned
+        // directly here in GameManager's own Inspector, a real user-authored prefab, so notes
+        // aren't dictated by lane layout (see NoteController.Init preserving that prefab's own
+        // SpriteRenderer instead of overwriting it).
+        public void SetupFromLaneBuilder(Transform[] hitZones, LaneTapFeedback[] feedbacks, float spawnY)
         {
             _laneHitZones = hitZones;
             _laneFeedback = feedbacks;
-            _notePrefab = notePrefab;
             _spawnY = spawnY;
             _generatorSettings.laneCount = hitZones.Length;
         }
@@ -153,6 +158,7 @@ namespace RhythmGame
             // came from SongSelectMenu (a different scene now).
             SetSpeedLevel(PlayerPrefs.GetFloat(SpeedLevelPrefKey, DefaultSpeedLevel));
             SetPlaybackSpeed(PlayerPrefs.GetFloat(PlaybackSpeedPrefKey, 1f));
+            _audioLatencyOffset = PlayerPrefs.GetFloat(LatencyCalibrator.OffsetPrefKey, 0f);
         }
 
         private IEnumerator Start()
@@ -277,7 +283,14 @@ namespace RhythmGame
         {
             if (!_playing || _beatmap == null) return;
 
-            if (!_audioSource.isPlaying)
+            // AudioSource.isPlaying alone isn't reliable for detecting a clip's natural end here
+            // — clips loaded via UnityWebRequestMultimedia/DownloadHandlerAudioClip can keep
+            // reporting "playing" past the clip's actual length (this is a known quirk with
+            // streamed/buffered clips). Elapsed time vs. the clip's own length is deterministic
+            // regardless of that, so check both — isPlaying still catches the source being
+            // stopped/destroyed externally before the clip would naturally finish.
+            bool reachedClipEnd = _audioSource.clip != null && _audioSource.time >= _audioSource.clip.length - 0.05f;
+            if (!_audioSource.isPlaying || reachedClipEnd)
             {
                 EndSong();
                 return;
@@ -389,6 +402,8 @@ namespace RhythmGame
                 closest.StartHold();
                 _heldNote[lane] = closest;
                 // Don't remove from _activeNotes yet — still needs to be despawned later
+                if (_laneFeedback != null && lane < _laneFeedback.Length && _laneFeedback[lane] != null)
+                    _laneFeedback[lane].StartHold();
             }
             else
             {
@@ -406,6 +421,8 @@ namespace RhythmGame
             _heldNote[lane] = null;
             _activeNotes[lane].Remove(held);
             held.ReleaseHold(SongTime);
+            if (_laneFeedback != null && lane < _laneFeedback.Length && _laneFeedback[lane] != null)
+                _laneFeedback[lane].StopHold();
         }
 
         public void OnHoldReleased(NoteController note, float fraction)
@@ -419,6 +436,11 @@ namespace RhythmGame
                 _heldNote[note.Lane] = null;
             _activeNotes[note.Lane].Remove(note);
             _scoreManager?.RecordJudgement(JudgementResult.Perfect);
+            // Reached ReleaseTime while still held (player never let go) — OnLaneReleased won't
+            // fire until later, so stop the particle stream here rather than leaving it running
+            // past the note's actual end.
+            if (_laneFeedback != null && note.Lane < _laneFeedback.Length && _laneFeedback[note.Lane] != null)
+                _laneFeedback[note.Lane].StopHold();
         }
 
         public void OnNoteMissed(NoteController note)

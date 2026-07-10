@@ -47,12 +47,19 @@ namespace RhythmGame
             _totalDistance = Vector3.Distance(spawnPos, hitPos);
             _unitsPerSecond = _totalDistance / approachTime;
 
-            _headRenderer = GetComponent<SpriteRenderer>();
-            if (_headRenderer == null) _headRenderer = gameObject.AddComponent<SpriteRenderer>();
-            _headRenderer.sprite   = Sprites.WhitePixel;
-            _headRenderer.material = Sprites.URPMaterial;
-            _headRenderer.color    = Color.white;
-            _headRenderer.sortingOrder = 2;
+            // Notes are their own user-authored prefab now (GameManager._notePrefab) — only
+            // fall back to the plain white-pixel look when the prefab has no SpriteRenderer at
+            // all (e.g. an empty placeholder GameObject); an already-configured one keeps
+            // whatever sprite/color/material it was authored with.
+            bool hadRenderer = TryGetComponent(out _headRenderer);
+            if (!hadRenderer)
+            {
+                _headRenderer = gameObject.AddComponent<SpriteRenderer>();
+                _headRenderer.sprite   = Sprites.WhitePixel;
+                _headRenderer.material = Sprites.URPMaterial;
+                _headRenderer.color    = Color.white;
+            }
+            _headRenderer.sortingOrder = 2; // keep consistent render order regardless of prefab authoring
 
             if (IsHold) BuildHoldSegments();
 
@@ -226,6 +233,49 @@ namespace RhythmGame
                           ?? Shader.Find("Sprites/Default");
                 _mat = new Material(shader);
                 return _mat;
+            }
+        }
+
+        // Soft circular dot (radial alpha falloff) rather than a flat square — looks like an
+        // actual particle instead of a confetti of tiny squares.
+        private static Texture2D _particleTex;
+        public static Texture2D ParticleTexture
+        {
+            get
+            {
+                if (_particleTex != null) return _particleTex;
+                const int size = 32;
+                var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
+                tex.filterMode = FilterMode.Bilinear;
+                Vector2 center = new Vector2(size - 1, size - 1) * 0.5f;
+                float maxDist = size * 0.5f;
+                for (int y = 0; y < size; y++)
+                {
+                    for (int x = 0; x < size; x++)
+                    {
+                        float dist = Vector2.Distance(new Vector2(x, y), center);
+                        float alpha = Mathf.Clamp01(1f - dist / maxDist);
+                        alpha *= alpha; // square the falloff so the edge fades rather than rings
+                        tex.SetPixel(x, y, new Color(1f, 1f, 1f, alpha));
+                    }
+                }
+                tex.Apply();
+                _particleTex = tex;
+                return _particleTex;
+            }
+        }
+
+        // Cloned from URPMaterial rather than looked up fresh — reuses the same shader already
+        // proven to alpha-blend correctly for this project's sprites (see WhitePixel/_flashColor
+        // usage), just swapping in the round particle texture instead of the flat white pixel.
+        private static Material _particleMat;
+        public static Material ParticleMaterial
+        {
+            get
+            {
+                if (_particleMat != null) return _particleMat;
+                _particleMat = new Material(URPMaterial) { mainTexture = ParticleTexture };
+                return _particleMat;
             }
         }
     }

@@ -26,6 +26,7 @@ namespace RhythmGame
         [Header("References — auto-filled/auto-created if left empty")]
         [SerializeField] private Canvas _canvas;
         [SerializeField] private SongSelectMenu _songSelectMenu;
+        [SerializeField] private LatencyCalibrator _latencyCalibrator;
 
         [Header("Layout")]
         [SerializeField] private Color _backgroundColor = new Color(0.05f, 0.05f, 0.08f, 1f);
@@ -43,9 +44,17 @@ namespace RhythmGame
         private GameObject _optionsPanel;
         private GameObject _volumePanel;
         private GameObject _aboutPanel;
+        private GameObject _syncPanel;
 
         private Slider _bgmSlider;
         private Slider _uiSlider;
+
+        private TextMeshProUGUI _syncStatusText;
+        private TextMeshProUGUI _syncOffsetText;
+        private GameObject _syncStartButton;
+        private GameObject _syncTapButton;
+
+        private GameObject[] _laneCountButtons; // indexed 0..(MaxLaneCount-MinLaneCount), for highlighting the current choice
 
         private void Awake()
         {
@@ -53,6 +62,8 @@ namespace RhythmGame
             if (_canvas == null) _canvas = FindFirstObjectByType<Canvas>();
             if (_canvas == null) _canvas = CreateCanvas();
             if (_songSelectMenu == null) _songSelectMenu = FindFirstObjectByType<SongSelectMenu>();
+            if (_latencyCalibrator == null) _latencyCalibrator = FindFirstObjectByType<LatencyCalibrator>();
+            if (_latencyCalibrator == null) _latencyCalibrator = gameObject.AddComponent<LatencyCalibrator>();
 
             Build();
         }
@@ -72,6 +83,7 @@ namespace RhythmGame
             _optionsPanel.SetActive(false);
             _volumePanel.SetActive(false);
             _aboutPanel.SetActive(false);
+            _syncPanel.SetActive(false);
         }
 
         public void ShowMain()
@@ -89,6 +101,7 @@ namespace RhythmGame
         private void ShowOptions()
         {
             HideAll();
+            RefreshLaneCountHighlight();
             _optionsPanel.SetActive(true);
         }
 
@@ -109,6 +122,25 @@ namespace RhythmGame
             _aboutPanel.SetActive(true);
         }
 
+        private void ShowSync()
+        {
+            HideAll();
+            RefreshSyncOffsetLabel();
+            _syncStatusText.text = "Tap in time with the clicks to measure your audio latency.";
+            _syncTapButton.SetActive(false);
+            _syncPanel.SetActive(true);
+        }
+
+        // Sync panel is nested one level under Options (unlike Volume/About, which are direct
+        // children of Main), so its back button returns there instead of going through
+        // BuildTitledBackPanel's hardcoded ShowMain — and cancels a test in progress so it
+        // doesn't keep scheduling clicks after the panel is gone.
+        private void OnSyncBack()
+        {
+            _latencyCalibrator.CancelCalibration();
+            ShowOptions();
+        }
+
         // -------------------------------------------------------------------------
         // Build UI
         // -------------------------------------------------------------------------
@@ -119,6 +151,7 @@ namespace RhythmGame
             BuildOptionsPanel();
             BuildVolumePanel();
             BuildAboutPanel();
+            BuildSyncPanel();
         }
 
         private void BuildMainPanel()
@@ -162,16 +195,63 @@ namespace RhythmGame
             _optionsPanel = RuntimeUI.CreatePanel(_canvas.transform, "OptionsPanel", _backgroundColor);
             BuildTitledBackPanel(_optionsPanel, "Options");
 
-            // Intentionally empty for now — see class doc comment above.
-            TextMeshProUGUI placeholder = RuntimeUI.CreateText(_optionsPanel.transform, "Placeholder",
-                "Nothing here yet.", 22, TextAlignmentOptions.Center);
-            RectTransform placeholderRT = placeholder.rectTransform;
-            placeholderRT.anchorMin = new Vector2(0.1f, 0.4f);
-            placeholderRT.anchorMax = new Vector2(0.9f, 0.6f);
-            placeholderRT.offsetMin = Vector2.zero;
-            placeholderRT.offsetMax = Vector2.zero;
+            TextMeshProUGUI laneLabel = RuntimeUI.CreateText(_optionsPanel.transform, "LaneCountLabel", "Lane Count", 24, TextAlignmentOptions.Center);
+            RectTransform laneLabelRT = laneLabel.rectTransform;
+            laneLabelRT.anchorMin = new Vector2(0.1f, 0.5f);
+            laneLabelRT.anchorMax = new Vector2(0.9f, 0.5f);
+            laneLabelRT.pivot = new Vector2(0.5f, 0.5f);
+            laneLabelRT.anchoredPosition = new Vector2(0f, 100f);
+            laneLabelRT.sizeDelta = new Vector2(0f, 40f);
+
+            int laneOptionCount = LaneSettings.MaxLaneCount - LaneSettings.MinLaneCount + 1;
+            _laneCountButtons = new GameObject[laneOptionCount];
+            float laneBtnWidth = 70f;
+            float laneBtnSpacing = 16f;
+            float laneRowWidth = laneOptionCount * laneBtnWidth + (laneOptionCount - 1) * laneBtnSpacing;
+            float laneStartX = -laneRowWidth / 2f + laneBtnWidth / 2f;
+            for (int i = 0; i < laneOptionCount; i++)
+            {
+                int count = LaneSettings.MinLaneCount + i;
+                GameObject btn = RuntimeUI.CreateButton(_optionsPanel.transform, $"LaneCount_{count}", count.ToString(),
+                    _itemColor, _itemHoverColor, 44f, () => OnLaneCountChosen(count));
+                RectTransform btnRT = btn.GetComponent<RectTransform>();
+                btnRT.anchorMin = new Vector2(0.5f, 0.5f);
+                btnRT.anchorMax = new Vector2(0.5f, 0.5f);
+                btnRT.pivot = new Vector2(0.5f, 0.5f);
+                btnRT.anchoredPosition = new Vector2(laneStartX + i * (laneBtnWidth + laneBtnSpacing), 50f);
+                btnRT.sizeDelta = new Vector2(laneBtnWidth, 44f);
+                _laneCountButtons[i] = btn;
+            }
+
+            // Game-mode selection (see class doc comment) will join these once that mode exists.
+            GameObject syncButton = RuntimeUI.CreateButton(_optionsPanel.transform, "AudioSyncButton",
+                "Audio Sync", _itemColor, _itemHoverColor, _itemHeight, ShowSync);
+            RectTransform syncRT = syncButton.GetComponent<RectTransform>();
+            syncRT.anchorMin = new Vector2(0.3f, 0.5f);
+            syncRT.anchorMax = new Vector2(0.7f, 0.5f);
+            syncRT.pivot = new Vector2(0.5f, 0.5f);
+            syncRT.anchoredPosition = new Vector2(0f, -30f);
+            syncRT.sizeDelta = new Vector2(0f, _itemHeight);
 
             _optionsPanel.SetActive(false);
+        }
+
+        private void OnLaneCountChosen(int count)
+        {
+            LaneSettings.SetLaneCount(count);
+            RefreshLaneCountHighlight();
+        }
+
+        private void RefreshLaneCountHighlight()
+        {
+            if (_laneCountButtons == null) return;
+            int selected = LaneSettings.LaneCount;
+            for (int i = 0; i < _laneCountButtons.Length; i++)
+            {
+                int count = LaneSettings.MinLaneCount + i;
+                bool isSelected = count == selected;
+                _laneCountButtons[i].GetComponent<Image>().color = isSelected ? _itemHoverColor : _itemColor;
+            }
         }
 
         private void BuildVolumePanel()
@@ -238,6 +318,131 @@ namespace RhythmGame
             bodyRT.offsetMax = Vector2.zero;
 
             _aboutPanel.SetActive(false);
+        }
+
+        // Tap-to-the-beat audio latency calibration — see LatencyCalibrator for the actual
+        // scheduling/measurement logic. This panel is just the front end: a status/progress
+        // label, the current saved offset, a Start button that kicks off the test, a Tap button
+        // that only appears once it's running, and ±10ms fine-tune buttons for adjusting by
+        // feel afterward without a full retest.
+        private void BuildSyncPanel()
+        {
+            _syncPanel = RuntimeUI.CreatePanel(_canvas.transform, "SyncPanel", _backgroundColor);
+
+            TextMeshProUGUI titleText = RuntimeUI.CreateText(_syncPanel.transform, "Title", "Audio Sync", 32, TextAlignmentOptions.Center);
+            RectTransform titleRT = titleText.rectTransform;
+            titleRT.anchorMin = new Vector2(0f, 1f);
+            titleRT.anchorMax = new Vector2(1f, 1f);
+            titleRT.pivot = new Vector2(0.5f, 1f);
+            titleRT.anchoredPosition = new Vector2(0f, -30f);
+            titleRT.sizeDelta = new Vector2(0f, 60f);
+
+            RuntimeUI.CreateBackButton(_syncPanel.transform, _itemColor, _itemHoverColor, OnSyncBack);
+
+            _syncStatusText = RuntimeUI.CreateText(_syncPanel.transform, "StatusText",
+                "Tap in time with the clicks to measure your audio latency.", 22, TextAlignmentOptions.Center);
+            _syncStatusText.enableWordWrapping = true;
+            RectTransform statusRT = _syncStatusText.rectTransform;
+            statusRT.anchorMin = new Vector2(0.1f, 0.66f);
+            statusRT.anchorMax = new Vector2(0.9f, 0.82f);
+            statusRT.offsetMin = Vector2.zero;
+            statusRT.offsetMax = Vector2.zero;
+
+            _syncOffsetText = RuntimeUI.CreateText(_syncPanel.transform, "OffsetText", "", 20, TextAlignmentOptions.Center);
+            RectTransform offsetRT = _syncOffsetText.rectTransform;
+            offsetRT.anchorMin = new Vector2(0.1f, 0.56f);
+            offsetRT.anchorMax = new Vector2(0.9f, 0.66f);
+            offsetRT.offsetMin = Vector2.zero;
+            offsetRT.offsetMax = Vector2.zero;
+
+            _syncStartButton = RuntimeUI.CreateButton(_syncPanel.transform, "StartButton", "Start Test",
+                _itemColor, _itemHoverColor, _itemHeight, OnSyncStartClicked);
+            RectTransform startRT = _syncStartButton.GetComponent<RectTransform>();
+            startRT.anchorMin = new Vector2(0.3f, 0.42f);
+            startRT.anchorMax = new Vector2(0.7f, 0.42f);
+            startRT.pivot = new Vector2(0.5f, 0.5f);
+            startRT.anchoredPosition = Vector2.zero;
+            startRT.sizeDelta = new Vector2(0f, _itemHeight);
+
+            _syncTapButton = RuntimeUI.CreateButton(_syncPanel.transform, "TapButton", "TAP",
+                _itemColor, _itemHoverColor, _itemHeight * 2f, () => _latencyCalibrator.RegisterTap());
+            RectTransform tapRT = _syncTapButton.GetComponent<RectTransform>();
+            tapRT.anchorMin = new Vector2(0.3f, 0.18f);
+            tapRT.anchorMax = new Vector2(0.7f, 0.18f);
+            tapRT.pivot = new Vector2(0.5f, 0.5f);
+            tapRT.anchoredPosition = Vector2.zero;
+            tapRT.sizeDelta = new Vector2(0f, _itemHeight * 2f);
+            _syncTapButton.SetActive(false); // only shown once a test is actually running
+
+            GameObject nudgeMinus = RuntimeUI.CreateButton(_syncPanel.transform, "NudgeMinus", "-10ms",
+                _itemColor, _itemHoverColor, _itemHeight * 0.7f, () => OnSyncNudge(-0.01f));
+            RectTransform nudgeMinusRT = nudgeMinus.GetComponent<RectTransform>();
+            nudgeMinusRT.anchorMin = new Vector2(0.1f, 0.5f);
+            nudgeMinusRT.anchorMax = new Vector2(0.1f, 0.5f);
+            nudgeMinusRT.pivot = new Vector2(0.5f, 0.5f);
+            nudgeMinusRT.anchoredPosition = new Vector2(0f, -50f);
+            nudgeMinusRT.sizeDelta = new Vector2(90f, _itemHeight * 0.7f);
+
+            GameObject nudgePlus = RuntimeUI.CreateButton(_syncPanel.transform, "NudgePlus", "+10ms",
+                _itemColor, _itemHoverColor, _itemHeight * 0.7f, () => OnSyncNudge(0.01f));
+            RectTransform nudgePlusRT = nudgePlus.GetComponent<RectTransform>();
+            nudgePlusRT.anchorMin = new Vector2(0.9f, 0.5f);
+            nudgePlusRT.anchorMax = new Vector2(0.9f, 0.5f);
+            nudgePlusRT.pivot = new Vector2(0.5f, 0.5f);
+            nudgePlusRT.anchoredPosition = new Vector2(0f, -50f);
+            nudgePlusRT.sizeDelta = new Vector2(90f, _itemHeight * 0.7f);
+
+            _latencyCalibrator.OnBeatScheduled += OnSyncBeatScheduled;
+            _latencyCalibrator.OnTapRegistered += OnSyncTapRegistered;
+            _latencyCalibrator.OnCalibrationComplete += OnSyncCalibrationComplete;
+            _latencyCalibrator.OnCalibrationCancelled += OnSyncCalibrationCancelled;
+
+            _syncPanel.SetActive(false);
+        }
+
+        private void OnSyncStartClicked()
+        {
+            _syncStartButton.SetActive(false);
+            _syncTapButton.SetActive(true);
+            _syncStatusText.text = "Get ready...";
+            _latencyCalibrator.BeginCalibration();
+        }
+
+        private void OnSyncBeatScheduled(int beatIndex, int totalBeats)
+        {
+            _syncStatusText.text = "Listen... then tap along.";
+        }
+
+        private void OnSyncTapRegistered(int tapsRecorded, int scoredBeats)
+        {
+            _syncStatusText.text = $"Tap {tapsRecorded} / {scoredBeats}";
+        }
+
+        private void OnSyncCalibrationComplete(float newOffsetSeconds, int samplesUsed)
+        {
+            _syncTapButton.SetActive(false);
+            _syncStartButton.SetActive(true);
+            _syncStatusText.text = samplesUsed > 0
+                ? $"Done — measured from {samplesUsed} taps."
+                : "Not enough taps registered — try again.";
+            RefreshSyncOffsetLabel();
+        }
+
+        private void OnSyncCalibrationCancelled()
+        {
+            _syncTapButton.SetActive(false);
+            _syncStartButton.SetActive(true);
+        }
+
+        private void OnSyncNudge(float deltaSeconds)
+        {
+            LatencyCalibrator.ApplyManualAdjustment(deltaSeconds);
+            RefreshSyncOffsetLabel();
+        }
+
+        private void RefreshSyncOffsetLabel()
+        {
+            _syncOffsetText.text = $"Current offset: {LatencyCalibrator.CurrentOffset * 1000f:F0} ms";
         }
 
         // Title text + back-to-main button, the shape shared by Options/Volume/About.

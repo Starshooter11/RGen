@@ -228,11 +228,9 @@ namespace RhythmGame
             RuntimeUI.ClearItems(_spawnedMaxNotesItems);
 
             // GameManager/LaneSetup live in the gameplay scene now, not this one, so this can't
-            // read the real wired lane count directly. Must match LaneSetup's configured lane
-            // count (currently 5) — if that's ever changed, update this too, or a maxNotesAtOnce
-            // greater than the real lane count can force two notes onto the same lane at once.
-            const int knownLaneCount = 5;
-            int lanes = Mathf.Max(1, knownLaneCount);
+            // read the real wired lane count directly — read the same persisted preference
+            // LaneSetup itself reads instead, so this always matches whatever's actually built.
+            int lanes = Mathf.Max(1, LaneSettings.LaneCount);
             for (int n = 1; n <= lanes; n++)
             {
                 int captured = n; // capture by value, not by loop variable reference
